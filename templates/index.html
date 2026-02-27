@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sheetmaster Flask + Gemini</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+  </head>
+  <body>
+    <main class="container">
+      <h1>Sheetmaster</h1>
+      <p>Flask starter with Gemini API integration.</p>
+
+      <form id="chat-form">
+        <label for="prompt">Prompt</label>
+        <textarea id="prompt" name="prompt" rows="6" placeholder="Ask Gemini something..." required></textarea>
+        <button type="submit">Send</button>
+      </form>
+
+      <section>
+        <h2>Response</h2>
+        <pre id="output">No response yet.</pre>
+      </section>
+    </main>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+  </body>
+</html>
