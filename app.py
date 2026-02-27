@@ -1,9 +1,10 @@
 import os
-import base64
+from io import BytesIO
 
 import requests
 from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
+from pypdf import PdfReader
 
 load_dotenv()
 
@@ -21,24 +22,20 @@ def analyze_practice():
     if not files:
         return jsonify({"error": "Upload at least one text file."}), 400
 
-    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
     if not api_key:
-        return jsonify({"error": "Missing GEMINI_API_KEY in environment."}), 400
+        return jsonify({"error": "Missing OPENROUTER_API_KEY in environment."}), 400
 
     max_files = 20
     max_chars_per_file = 12000
     max_total_chars = 90000
-    max_binary_bytes_per_file = 8 * 1024 * 1024
-    max_total_binary_bytes = 30 * 1024 * 1024
     allowed_extensions = {".txt", ".md", ".csv", ".rtf", ".pdf", ".png", ".jpg", ".jpeg"}
 
     if len(files) > max_files:
         return jsonify({"error": f"Too many files. Max allowed is {max_files}."}), 400
 
-    text_files = []
-    binary_parts = []
+    parsed_files = []
     total_chars = 0
-    total_binary_bytes = 0
 
     for uploaded_file in files:
         filename = (uploaded_file.filename or "").strip()
@@ -51,7 +48,7 @@ def analyze_practice():
                 {
                     "error": (
                         f"Unsupported file extension for '{filename}'. "
-                        "Allowed: .txt, .md, .csv, .rtf"
+                        "Allowed: .txt, .md, .csv, .rtf, .pdf, .png, .jpg, .jpeg"
                     )
                 }
             ), 400
@@ -60,53 +57,33 @@ def analyze_practice():
         if not raw:
             continue
 
-        if ext in {".pdf", ".png", ".jpg", ".jpeg"}:
-            file_size = len(raw)
-            if file_size > max_binary_bytes_per_file:
-                return jsonify(
-                    {
-                        "error": (
-                            f"'{filename}' is too large. "
-                            f"Max size per PDF/image is {max_binary_bytes_per_file // (1024 * 1024)}MB."
-                        )
-                    }
-                ), 400
-
-            total_binary_bytes += file_size
-            if total_binary_bytes > max_total_binary_bytes:
-                return jsonify(
-                    {
-                        "error": (
-                            "Total PDF/image upload size is too large. "
-                            f"Keep combined binary files under {max_total_binary_bytes // (1024 * 1024)}MB."
-                        )
-                    }
-                ), 400
-
-            mime_type = {
-                ".pdf": "application/pdf",
-                ".png": "image/png",
-                ".jpg": "image/jpeg",
-                ".jpeg": "image/jpeg",
-            }[ext]
-            encoded = base64.b64encode(raw).decode("ascii")
-            binary_parts.append(
+        if ext in {".png", ".jpg", ".jpeg"}:
+            return jsonify(
                 {
-                    "filename": filename,
-                    "part": {"inline_data": {"mime_type": mime_type, "data": encoded}},
+                    "error": (
+                        "PNG/JPG uploads are accepted by the UI, but the selected model "
+                        "'meta-llama/llama-3.3-70b-instruct:free' is text-only. "
+                        "Please use text/PDF files or switch to a vision model."
+                    )
                 }
-            )
-            continue
+            ), 400
 
-        try:
-            text = raw.decode("utf-8")
-        except UnicodeDecodeError:
+        if ext == ".pdf":
             try:
-                text = raw.decode("latin-1")
+                reader = PdfReader(BytesIO(raw))
+                text = "\n".join((page.extract_text() or "") for page in reader.pages).strip()
+            except Exception:
+                return jsonify({"error": f"Could not read text from PDF '{filename}'."}), 400
+        else:
+            try:
+                text = raw.decode("utf-8")
             except UnicodeDecodeError:
-                return jsonify({"error": f"Could not decode '{filename}' as text."}), 400
+                try:
+                    text = raw.decode("latin-1")
+                except UnicodeDecodeError:
+                    return jsonify({"error": f"Could not decode '{filename}' as text."}), 400
 
-        text = text.strip()
+        text = (text or "").strip()
         if not text:
             continue
 
@@ -124,29 +101,25 @@ def analyze_practice():
                 }
             ), 400
 
-        text_files.append({"filename": filename, "text": text})
+        parsed_files.append({"filename": filename, "text": text})
 
-    if not text_files and not binary_parts:
+    if not parsed_files:
         return jsonify({"error": "No readable text content found in uploaded files."}), 400
 
-    model = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{model}:generateContent?key={api_key}"
-    )
+    model = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
+    url = "https://openrouter.ai/api/v1/chat/completions"
 
     file_blocks = "\n\n".join(
         [
             f"FILE: {item['filename']}\n---\n{item['text']}"
-            for item in text_files
+            for item in parsed_files
         ]
     )
-    binary_file_list = ", ".join(item["filename"] for item in binary_parts) or "None"
     analysis_prompt = f"""
 You are analyzing multiple student practice materials.
 
 Goal:
-Tell me exactly what is being covered across these files (including text files, PDFs, and images).
+Tell me exactly what is being covered across these files.
 
 Output format:
 1) Covered topics:
@@ -162,45 +135,39 @@ Output format:
 
 Use clear headings and keep it concise but specific.
 
-PDF/Image files included:
-{binary_file_list}
-
-Text file contents:
+File contents:
 {file_blocks or "None"}
 """.strip()
 
-    parts = [{"text": analysis_prompt}]
-    for item in binary_parts:
-        parts.append({"text": f"FILE: {item['filename']}"})
-        parts.append(item["part"])
-
-    payload = {"contents": [{"parts": parts}]}
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "You produce precise, structured educational analysis."},
+            {"role": "user", "content": analysis_prompt},
+        ],
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
 
     try:
-        response = requests.post(url, json=payload, timeout=30)
+        response = requests.post(url, headers=headers, json=payload, timeout=60)
         response.raise_for_status()
         body = response.json()
     except requests.RequestException as exc:
-        return jsonify({"error": f"Gemini request failed: {exc}"}), 502
+        return jsonify({"error": f"OpenRouter request failed: {exc}"}), 502
 
-    text = ""
-    candidates = body.get("candidates") or []
-    if candidates:
-        parts = ((candidates[0].get("content") or {}).get("parts") or [])
-        if parts:
-            text = parts[0].get("text", "")
+    text = ((body.get("choices") or [{}])[0].get("message") or {}).get("content", "")
 
     if not text:
-        return jsonify({"error": "Gemini returned no text response.", "raw": body}), 502
+        return jsonify({"error": "OpenRouter returned no text response.", "raw": body}), 502
 
     return jsonify(
         {
             "response": text,
-            "files_analyzed": [
-                *[item["filename"] for item in text_files],
-                *[item["filename"] for item in binary_parts],
-            ],
-            "total_files": len(text_files) + len(binary_parts),
+            "files_analyzed": [item["filename"] for item in parsed_files],
+            "total_files": len(parsed_files),
         }
     )
 
