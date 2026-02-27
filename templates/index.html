@@ -9,16 +9,24 @@
   <body>
     <main class="container">
       <h1>Sheetmaster</h1>
-      <p>Flask starter with Gemini API integration.</p>
+      <p>Upload practice text files and get a Gemini coverage analysis.</p>
 
-      <form id="chat-form">
-        <label for="prompt">Prompt</label>
-        <textarea id="prompt" name="prompt" rows="6" placeholder="Ask Gemini something..." required></textarea>
-        <button type="submit">Send</button>
+      <form id="analyze-form">
+        <label for="files">Practice Text Files</label>
+        <input
+          id="files"
+          name="files"
+          type="file"
+          multiple
+          accept=".txt,.md,.csv,.rtf,.pdf,.png,.jpg,.jpeg,text/plain,application/pdf,image/png,image/jpeg"
+          required
+        />
+        <button type="submit">Analyze Coverage</button>
       </form>
 
       <section>
-        <h2>Response</h2>
+        <h2>Analysis</h2>
+        <p id="meta"></p>
         <pre id="output">No response yet.</pre>
       </section>
     </main>
