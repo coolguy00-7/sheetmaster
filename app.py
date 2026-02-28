@@ -325,7 +325,16 @@ Analysis to transform:
 
     user_content = [{"type": "text", "text": prompt}]
     reference_model = os.getenv("OPENROUTER_REFERENCE_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
-    result = call_openrouter_with_fallback(api_key, user_content, primary_model=reference_model, fallback_models_raw="")
+    reference_fallback_models = os.getenv(
+        "OPENROUTER_REFERENCE_FALLBACK_MODELS",
+        "mistralai/mistral-small-3.1-24b-instruct:free,google/gemma-3-12b-it:free,google/gemma-3-4b-it:free",
+    )
+    result = call_openrouter_with_fallback(
+        api_key,
+        user_content,
+        primary_model=reference_model,
+        fallback_models_raw=reference_fallback_models,
+    )
     if not result["ok"]:
         return jsonify({**result["error"], "models_tried": result["models_tried"], "failed_models": result["failed_models"]}), 502
 
