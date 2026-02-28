@@ -180,12 +180,32 @@ File contents:
     model_used = ""
 
     for model in models_to_try:
-        payload = {
-            "model": model,
-            "messages": [
+        # Some providers (e.g., Gemma via Google AI Studio) reject system/developer instructions.
+        if model.startswith("google/gemma-"):
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                "You produce precise, structured educational analysis.\n\n"
+                                f"{analysis_prompt}"
+                            ),
+                        },
+                        *user_content[1:],
+                    ],
+                }
+            ]
+        else:
+            messages = [
                 {"role": "system", "content": "You produce precise, structured educational analysis."},
                 {"role": "user", "content": user_content},
-            ],
+            ]
+
+        payload = {
+            "model": model,
+            "messages": messages,
         }
 
         response = None
