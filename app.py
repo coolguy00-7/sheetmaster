@@ -13,6 +13,114 @@ load_dotenv()
 app = Flask(__name__)
 
 
+def call_openrouter_with_fallback(api_key, user_content):
+    primary_model = os.getenv("OPENROUTER_MODEL", "mistralai/mistral-small-3.1-24b-instruct:free")
+    fallback_models_raw = os.getenv(
+        "OPENROUTER_FALLBACK_MODELS",
+        "google/gemma-3-12b-it:free,google/gemma-3-4b-it:free",
+    )
+    models_to_try = [primary_model]
+    for fallback_model in fallback_models_raw.split(","):
+        fallback_model = fallback_model.strip()
+        if fallback_model and fallback_model not in models_to_try:
+            models_to_try.append(fallback_model)
+
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    failed_models = []
+    final_error = {"error": "OpenRouter request failed.", "details": "No models attempted."}
+
+    for model in models_to_try:
+        # Some providers (e.g., Gemma via Google AI Studio) reject system/developer instructions.
+        if model.startswith("google/gemma-"):
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "You produce precise, structured educational analysis.",
+                        },
+                        *user_content,
+                    ],
+                }
+            ]
+        else:
+            messages = [
+                {"role": "system", "content": "You produce precise, structured educational analysis."},
+                {"role": "user", "content": user_content},
+            ]
+
+        payload = {
+            "model": model,
+            "messages": messages,
+        }
+
+        response = None
+        last_error = None
+        for attempt in range(3):
+            try:
+                response = requests.post(url, headers=headers, json=payload, timeout=60)
+                if response.status_code in {429, 500, 502, 503, 504} and attempt < 2:
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                break
+            except requests.RequestException as exc:
+                last_error = exc
+                if attempt < 2:
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+
+        if response is None:
+            failed_models.append(model)
+            final_error = {"error": f"OpenRouter request failed for model '{model}'.", "details": str(last_error)}
+            continue
+
+        if not response.ok:
+            status_code = response.status_code
+            try:
+                details = response.json()
+            except ValueError:
+                details = (response.text or "")[:500]
+
+            failed_models.append(model)
+            final_error = {
+                "error": f"OpenRouter request failed with status {status_code}.",
+                "details": details,
+                "model": model,
+            }
+
+            if status_code in {402, 404, 429, 500, 502, 503, 504}:
+                continue
+            break
+
+        body = response.json()
+        text = ((body.get("choices") or [{}])[0].get("message") or {}).get("content", "")
+        if text:
+            return {
+                "ok": True,
+                "text": text,
+                "model_used": model,
+            }
+
+        failed_models.append(model)
+        final_error = {
+            "error": f"OpenRouter returned no text response for model '{model}'.",
+            "details": body,
+        }
+
+    return {
+        "ok": False,
+        "error": final_error,
+        "models_tried": models_to_try,
+        "failed_models": failed_models,
+    }
+
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -118,19 +226,6 @@ def analyze_practice():
     if not parsed_files and not image_files:
         return jsonify({"error": "No readable text content found in uploaded files."}), 400
 
-    primary_model = os.getenv("OPENROUTER_MODEL", "mistralai/mistral-small-3.1-24b-instruct:free")
-    fallback_models_raw = os.getenv(
-        "OPENROUTER_FALLBACK_MODELS",
-        "google/gemma-3-12b-it:free,google/gemma-3-4b-it:free",
-    )
-    models_to_try = [primary_model]
-    for fallback_model in fallback_models_raw.split(","):
-        fallback_model = fallback_model.strip()
-        if fallback_model and fallback_model not in models_to_try:
-            models_to_try.append(fallback_model)
-
-    url = "https://openrouter.ai/api/v1/chat/completions"
-
     file_blocks = "\n\n".join(
         [
             f"FILE: {item['filename']}\n---\n{item['text']}"
@@ -170,106 +265,59 @@ File contents:
         user_content.append({"type": "text", "text": f"Image file: {image['filename']}"})
         user_content.append({"type": "image_url", "image_url": {"url": image["data_uri"]}})
 
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    failed_models = []
-    final_error = {"error": "OpenRouter request failed.", "details": "No models attempted."}
-    text = ""
-    model_used = ""
-
-    for model in models_to_try:
-        # Some providers (e.g., Gemma via Google AI Studio) reject system/developer instructions.
-        if model.startswith("google/gemma-"):
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": (
-                                "You produce precise, structured educational analysis.\n\n"
-                                f"{analysis_prompt}"
-                            ),
-                        },
-                        *user_content[1:],
-                    ],
-                }
-            ]
-        else:
-            messages = [
-                {"role": "system", "content": "You produce precise, structured educational analysis."},
-                {"role": "user", "content": user_content},
-            ]
-
-        payload = {
-            "model": model,
-            "messages": messages,
-        }
-
-        response = None
-        last_error = None
-        for attempt in range(3):
-            try:
-                response = requests.post(url, headers=headers, json=payload, timeout=60)
-                if response.status_code in {429, 500, 502, 503, 504} and attempt < 2:
-                    time.sleep(1.5 * (attempt + 1))
-                    continue
-                break
-            except requests.RequestException as exc:
-                last_error = exc
-                if attempt < 2:
-                    time.sleep(1.5 * (attempt + 1))
-                    continue
-
-        if response is None:
-            failed_models.append(model)
-            final_error = {"error": f"OpenRouter request failed for model '{model}'.", "details": str(last_error)}
-            continue
-
-        if not response.ok:
-            status_code = response.status_code
-            try:
-                details = response.json()
-            except ValueError:
-                details = (response.text or "")[:500]
-
-            failed_models.append(model)
-            final_error = {
-                "error": f"OpenRouter request failed with status {status_code}.",
-                "details": details,
-                "model": model,
-            }
-
-            # Try another model on common provider/model/rate failures.
-            if status_code in {402, 404, 429, 500, 502, 503, 504}:
-                continue
-            break
-
-        body = response.json()
-        text = ((body.get("choices") or [{}])[0].get("message") or {}).get("content", "")
-        if text:
-            model_used = model
-            break
-
-        failed_models.append(model)
-        final_error = {
-            "error": f"OpenRouter returned no text response for model '{model}'.",
-            "details": body,
-        }
-
-    if not text:
-        return jsonify({**final_error, "models_tried": models_to_try, "failed_models": failed_models}), 502
+    result = call_openrouter_with_fallback(api_key, user_content)
+    if not result["ok"]:
+        return jsonify({**result["error"], "models_tried": result["models_tried"], "failed_models": result["failed_models"]}), 502
+    text = result["text"]
 
     return jsonify(
         {
             "response": text,
             "files_analyzed": [item["filename"] for item in parsed_files] + [item["filename"] for item in image_files],
             "total_files": len(parsed_files) + len(image_files),
-            "model_used": model_used or primary_model,
+            "model_used": result["model_used"],
         }
     )
+
+
+@app.post("/api/generate-reference-sheet")
+def generate_reference_sheet():
+    data = request.get_json(silent=True) or {}
+    analysis_text = (data.get("analysis") or "").strip()
+    if not analysis_text:
+        return jsonify({"error": "Analysis text is required."}), 400
+
+    api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+    if not api_key:
+        return jsonify({"error": "Missing OPENROUTER_API_KEY in environment."}), 400
+
+    prompt = f"""
+Create a highly compressed exam reference sheet from the analysis below.
+
+Constraints:
+- Cover every topic and skill mentioned in the analysis.
+- Output plain text only (no markdown fences).
+- Keep formatting compact with short headers, bullets, formulas, and quick examples.
+- Target print density for two letter-sized pages at 6pt font.
+- Use approximately 1400-2000 words.
+- Include:
+  1) Topic map
+  2) Core rules/formulas/facts
+  3) Common traps/mistakes
+  4) Fast solving patterns
+  5) Mini worked examples
+  6) Last-minute checklist
+
+Analysis to transform:
+{analysis_text}
+""".strip()
+
+    user_content = [{"type": "text", "text": prompt}]
+    result = call_openrouter_with_fallback(api_key, user_content)
+    if not result["ok"]:
+        return jsonify({**result["error"], "models_tried": result["models_tried"], "failed_models": result["failed_models"]}), 502
+
+    return jsonify({"reference_sheet": result["text"], "model_used": result["model_used"]})
 
 
 if __name__ == "__main__":

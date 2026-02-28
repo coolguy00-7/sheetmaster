@@ -152,6 +152,10 @@ button:hover {
   box-shadow: 0 8px 18px rgba(31, 122, 102, 0.27);
 }
 
+.actions {
+  margin-top: 10px;
+}
+
 pre {
   margin: 0;
   background: #f3f7fc;
@@ -174,6 +178,35 @@ pre {
   font-family: "Space Grotesk", sans-serif;
 }
 
+.panel-sheet h2 {
+  margin: 0 0 8px;
+  font-family: "Space Grotesk", sans-serif;
+}
+
+.reference-sheet {
+  display: grid;
+  gap: 14px;
+}
+
+.sheet-page {
+  background: #fff;
+  border: 1px solid rgba(18, 33, 51, 0.14);
+  border-radius: 10px;
+  padding: 18px;
+  min-height: 10.35in;
+  font-size: 6pt;
+  line-height: 1.18;
+  white-space: pre-wrap;
+  overflow: hidden;
+  color: #1a2432;
+}
+
+#sheet-meta {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 @media (max-width: 640px) {
   .app-shell {
     width: calc(100vw - 20px);
@@ -184,5 +217,41 @@ pre {
   .panel {
     border-radius: 16px;
     padding: 14px;
+  }
+}
+
+@media print {
+  body {
+    background: #fff !important;
+  }
+
+  .hero,
+  #analyze-form,
+  .panel-analysis {
+    display: none !important;
+  }
+
+  .app-shell,
+  .panel,
+  .reference-sheet {
+    margin: 0 !important;
+    width: 100% !important;
+    box-shadow: none !important;
+    border: none !important;
+    padding: 0 !important;
+    gap: 0 !important;
+  }
+
+  .sheet-page {
+    page-break-after: always;
+    min-height: auto;
+    height: 10.5in;
+    border: none;
+    border-radius: 0;
+    padding: 0.4in;
+  }
+
+  .sheet-page:last-child {
+    page-break-after: auto;
   }
 }

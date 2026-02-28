@@ -5,6 +5,10 @@ const fileSummary = document.getElementById("file-summary");
 const fileList = document.getElementById("file-list");
 const meta = document.getElementById("meta");
 const output = document.getElementById("output");
+const generateSheetBtn = document.getElementById("generate-sheet-btn");
+const sheetMeta = document.getElementById("sheet-meta");
+const sheetPage1 = document.getElementById("sheet-page-1");
+const sheetPage2 = document.getElementById("sheet-page-2");
 
 const renderFileSelection = () => {
   const files = filesInput.files;
@@ -91,5 +95,56 @@ form.addEventListener("submit", async (event) => {
   } catch (error) {
     output.textContent = `Network error: ${error.message}`;
     meta.textContent = "";
+  }
+});
+
+const splitSheetText = (text) => {
+  const lines = text.split("\n");
+  const midpoint = Math.ceil(lines.length / 2);
+  const first = lines.slice(0, midpoint).join("\n").trim();
+  const second = lines.slice(midpoint).join("\n").trim();
+  return [first, second];
+};
+
+generateSheetBtn.addEventListener("click", async () => {
+  const analysis = output.textContent.trim();
+  if (!analysis || analysis === "No response yet." || analysis === "Loading...") {
+    sheetMeta.textContent = "Generate analysis first.";
+    return;
+  }
+
+  sheetMeta.textContent = "Generating 2-page reference sheet...";
+  sheetPage1.textContent = "Generating...";
+  sheetPage2.textContent = "";
+
+  try {
+    const res = await fetch("/api/generate-reference-sheet", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ analysis }),
+    });
+
+    const data = await res.json();
+    if (!res.ok) {
+      const details =
+        typeof data.details === "string"
+          ? data.details
+          : data.details
+            ? JSON.stringify(data.details, null, 2)
+            : "";
+      sheetMeta.textContent = "Sheet generation failed.";
+      sheetPage1.textContent = details ? `${data.error || "Request failed."}\n\n${details}` : data.error || "Request failed.";
+      sheetPage2.textContent = "";
+      return;
+    }
+
+    const [pageOne, pageTwo] = splitSheetText(data.reference_sheet || "");
+    sheetPage1.textContent = pageOne || "No content generated.";
+    sheetPage2.textContent = pageTwo || "No overflow content.";
+    sheetMeta.textContent = `Reference sheet generated using ${data.model_used}.`;
+  } catch (error) {
+    sheetMeta.textContent = "Sheet generation failed.";
+    sheetPage1.textContent = `Network error: ${error.message}`;
+    sheetPage2.textContent = "";
   }
 });
