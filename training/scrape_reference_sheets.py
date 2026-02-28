@@ -99,9 +99,14 @@ def get_robot_parser(url, cache):
     if host in cache:
         return cache[host]
     rp = RobotFileParser()
-    rp.set_url(urljoin(host, "/robots.txt"))
+    robots_url = urljoin(host, "/robots.txt")
+    rp.set_url(robots_url)
     try:
-        rp.read()
+        response = requests.get(robots_url, headers={"User-Agent": USER_AGENT}, timeout=15)
+        if response.status_code >= 400:
+            cache[host] = None
+            return None
+        rp.parse(response.text.splitlines())
     except Exception:
         cache[host] = None
         return None
@@ -185,7 +190,10 @@ def crawl(args):
                 continue
 
             final_url = normalize_url(response.url)
-            if not final_url or final_url in visited:
+            if not final_url:
+                time.sleep(args.delay_seconds)
+                continue
+            if final_url != url and final_url in visited:
                 time.sleep(args.delay_seconds)
                 continue
             visited.add(final_url)

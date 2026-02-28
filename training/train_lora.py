@@ -1,9 +1,9 @@
 import argparse
 
 from datasets import load_dataset
-from peft import LoraConfig
-from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
-from trl import SFTTrainer
+from peft import LoraConfig, get_peft_model
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer, DataCollatorForLanguageModeling, Trainer, TrainingArguments
 
 
 def parse_args():
@@ -22,6 +22,9 @@ def parse_args():
     parser.add_argument("--lora-dropout", type=float, default=0.05)
     parser.add_argument("--save-steps", type=int, default=100)
     parser.add_argument("--logging-steps", type=int, default=10)
+    parser.add_argument("--max-steps", type=int, default=-1, help="Set >0 for a short smoke training run.")
+    parser.add_argument("--fp16", action="store_true", help="Force fp16 training.")
+    parser.add_argument("--bf16", action="store_true", help="Force bf16 training.")
     return parser.parse_args()
 
 
@@ -51,29 +54,52 @@ def main():
         task_type="CAUSAL_LM",
     )
 
+    use_fp16 = args.fp16
+    use_bf16 = args.bf16
+    if not use_fp16 and not use_bf16:
+        if torch.cuda.is_available():
+            use_bf16 = torch.cuda.is_bf16_supported()
+            use_fp16 = not use_bf16
+
     training_args = TrainingArguments(
         output_dir=args.output_dir,
         num_train_epochs=args.num_epochs,
+        max_steps=args.max_steps,
         per_device_train_batch_size=args.batch_size,
         gradient_accumulation_steps=args.grad_accum,
         learning_rate=args.learning_rate,
         logging_steps=args.logging_steps,
         save_steps=args.save_steps,
-        fp16=False,
-        bf16=True,
+        fp16=use_fp16,
+        bf16=use_bf16,
         report_to="none",
         save_total_limit=3,
     )
 
-    trainer = SFTTrainer(
+    model = get_peft_model(model, peft_config)
+
+    def tokenize_batch(batch):
+        return tokenizer(
+            batch["text"],
+            truncation=True,
+            max_length=args.max_seq_len,
+            padding=False,
+        )
+
+    tokenized_train = dataset["train"].map(tokenize_batch, batched=True, remove_columns=dataset["train"].column_names)
+    tokenized_eval = None
+    if "validation" in dataset:
+        tokenized_eval = dataset["validation"].map(
+            tokenize_batch, batched=True, remove_columns=dataset["validation"].column_names
+        )
+
+    data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+    trainer = Trainer(
         model=model,
-        tokenizer=tokenizer,
-        train_dataset=dataset["train"],
-        eval_dataset=dataset.get("validation"),
-        peft_config=peft_config,
         args=training_args,
-        dataset_text_field="text",
-        max_seq_length=args.max_seq_len,
+        train_dataset=tokenized_train,
+        eval_dataset=tokenized_eval,
+        data_collator=data_collator,
     )
     trainer.train()
     trainer.save_model(args.output_dir)
