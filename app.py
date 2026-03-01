@@ -419,6 +419,12 @@ def call_hf_with_fallback(api_key, prompt, primary_model=None, fallback_models_r
             except ValueError:
                 details = (response.text or "")[:500]
 
+            error_code = None
+            if isinstance(details, dict):
+                error_obj = details.get("error")
+                if isinstance(error_obj, dict):
+                    error_code = error_obj.get("code")
+
             failed_models.append(model)
             final_error = {
                 "error": f"Hugging Face request failed with status {status_code}.",
@@ -427,6 +433,8 @@ def call_hf_with_fallback(api_key, prompt, primary_model=None, fallback_models_r
             }
 
             if status_code in {401, 402, 404, 408, 424, 429, 500, 502, 503, 504}:
+                continue
+            if status_code == 400 and error_code in {"model_not_supported", "model_not_found", "provider_not_available"}:
                 continue
             break
 
