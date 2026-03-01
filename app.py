@@ -139,13 +139,13 @@ def _safe_parse_json_object(text):
         return None
 
 
-def _openrouter_text(api_key, prompt, primary_model, fallback_models_raw):
-    user_content = [{"type": "text", "text": prompt}]
-    return call_openrouter_with_fallback(
+def _hf_text(api_key, prompt, primary_model, fallback_models_raw, system_prompt=None):
+    return call_hf_with_fallback(
         api_key,
-        user_content,
+        prompt,
         primary_model=primary_model,
         fallback_models_raw=fallback_models_raw,
+        system_prompt=system_prompt,
     )
 
 
@@ -186,7 +186,7 @@ Analysis:
 Sheet:
 {sheet_text}
 """.strip()
-    judge_result = _openrouter_text(api_key, judge_prompt, judge_model, judge_fallback)
+    judge_result = _hf_text(api_key, judge_prompt, judge_model, judge_fallback)
     quality = {"score": None, "coverage": None, "accuracy_risk": None, "density": None, "requirements_fit": None, "issues": []}
     if judge_result["ok"]:
         parsed = _safe_parse_json_object(judge_result["text"])
@@ -204,35 +204,35 @@ Sheet:
     return judge_result, quality
 
 
-def _generate_reference_sheet_openrouter_high_quality(api_key, analysis_text, requirements):
-    gen_model = os.getenv("OPENROUTER_REFERENCE_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
+def _generate_reference_sheet_hf_high_quality(api_key, analysis_text, requirements):
+    gen_model = os.getenv("HF_REFERENCE_MODEL", "Qwen/Qwen2.5-72B-Instruct")
     gen_fallback = os.getenv(
-        "OPENROUTER_REFERENCE_FALLBACK_MODELS",
-        "mistralai/mistral-small-3.1-24b-instruct:free,google/gemma-3-12b-it:free,google/gemma-3-4b-it:free",
+        "HF_REFERENCE_FALLBACK_MODELS",
+        "Qwen/Qwen3.5-35B-A3B,Qwen/Qwen3.5-27B",
     )
     candidate_models = _parse_model_list(
         os.getenv(
-            "OPENROUTER_REFERENCE_CANDIDATE_MODELS",
+            "HF_REFERENCE_CANDIDATE_MODELS",
             (
-                "meta-llama/llama-3.3-70b-instruct:free,"
-                "mistralai/mistral-small-3.1-24b-instruct:free,"
-                "google/gemma-3-12b-it:free"
+                "Qwen/Qwen2.5-72B-Instruct,"
+                "Qwen/Qwen3.5-35B-A3B,"
+                "Qwen/Qwen3.5-27B"
             ),
         )
     )
     if not candidate_models:
         candidate_models = [gen_model]
-    max_candidates = max(1, min(5, int(os.getenv("OPENROUTER_REFERENCE_MAX_CANDIDATES", "3"))))
+    max_candidates = max(1, min(5, int(os.getenv("HF_REFERENCE_MAX_CANDIDATES", "3"))))
 
-    critique_model = os.getenv("OPENROUTER_CRITIQUE_MODEL", "google/gemma-3-12b-it:free")
-    critique_fallback = os.getenv("OPENROUTER_CRITIQUE_FALLBACK_MODELS", "google/gemma-3-4b-it:free")
-    judge_model = os.getenv("OPENROUTER_JUDGE_MODEL", critique_model)
-    judge_fallback = os.getenv("OPENROUTER_JUDGE_FALLBACK_MODELS", critique_fallback)
+    critique_model = os.getenv("HF_CRITIQUE_MODEL", "Qwen/Qwen3.5-27B")
+    critique_fallback = os.getenv("HF_CRITIQUE_FALLBACK_MODELS", "Qwen/Qwen3.5-35B-A3B")
+    judge_model = os.getenv("HF_JUDGE_MODEL", critique_model)
+    judge_fallback = os.getenv("HF_JUDGE_FALLBACK_MODELS", critique_fallback)
 
     base_prompt = build_reference_sheet_prompt(analysis_text, requirements)
     draft_candidates = []
     for model in candidate_models[:max_candidates]:
-        candidate_result = _openrouter_text(api_key, base_prompt, model, gen_fallback)
+        candidate_result = _hf_text(api_key, base_prompt, model, gen_fallback)
         if candidate_result["ok"]:
             draft_candidates.append(candidate_result)
     if not draft_candidates:
@@ -288,7 +288,7 @@ Analysis source:
 Draft sheet:
 {draft}
 """.strip()
-    critique_result = _openrouter_text(api_key, critique_prompt, critique_model, critique_fallback)
+    critique_result = _hf_text(api_key, critique_prompt, critique_model, critique_fallback)
     critique = critique_result["text"] if critique_result["ok"] else "No critique available."
 
     revise_prompt = f"""
@@ -314,7 +314,7 @@ Draft:
 Critique to address:
 {critique}
 """.strip()
-    final_result = _openrouter_text(api_key, revise_prompt, gen_model, gen_fallback)
+    final_result = _hf_text(api_key, revise_prompt, gen_model, gen_fallback)
     if not final_result["ok"]:
         return {
             "ok": True,
@@ -365,11 +365,11 @@ Critique to address:
     }
 
 
-def call_openrouter_with_fallback(api_key, user_content, primary_model=None, fallback_models_raw=None):
-    primary_model = primary_model or os.getenv("OPENROUTER_MODEL", "mistralai/mistral-small-3.1-24b-instruct:free")
+def call_hf_with_fallback(api_key, prompt, primary_model=None, fallback_models_raw=None, system_prompt=None):
+    primary_model = primary_model or os.getenv("HF_MODEL", "Qwen/Qwen3.5-27B")
     fallback_models_raw = fallback_models_raw if fallback_models_raw is not None else os.getenv(
-        "OPENROUTER_FALLBACK_MODELS",
-        "google/gemma-3-12b-it:free,google/gemma-3-4b-it:free",
+        "HF_FALLBACK_MODELS",
+        "Qwen/Qwen3.5-35B-A3B,Qwen/Qwen2.5-72B-Instruct",
     )
     models_to_try = [primary_model]
     for fallback_model in fallback_models_raw.split(","):
@@ -377,47 +377,27 @@ def call_openrouter_with_fallback(api_key, user_content, primary_model=None, fal
         if fallback_model and fallback_model not in models_to_try:
             models_to_try.append(fallback_model)
 
-    url = "https://openrouter.ai/api/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-
     failed_models = []
-    final_error = {"error": "OpenRouter request failed.", "details": "No models attempted."}
+    final_error = {"error": "Hugging Face request failed.", "details": "No models attempted."}
 
     for model in models_to_try:
-        # Some providers (e.g., Gemma via Google AI Studio) reject system/developer instructions.
-        if model.startswith("google/gemma-"):
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "You produce precise, structured educational analysis.",
-                        },
-                        *user_content,
-                    ],
-                }
-            ]
-        else:
-            messages = [
-                {"role": "system", "content": "You produce precise, structured educational analysis."},
-                {"role": "user", "content": user_content},
-            ]
-
-        payload = {
-            "model": model,
-            "messages": messages,
+        url = "https://router.huggingface.co/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
         }
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+        payload = {"model": model, "messages": messages, "max_tokens": 3500, "temperature": 0.2}
 
         response = None
         last_error = None
         for attempt in range(3):
             try:
                 response = requests.post(url, headers=headers, json=payload, timeout=60)
-                if response.status_code in {429, 500, 502, 503, 504} and attempt < 2:
+                if response.status_code in {408, 424, 429, 500, 502, 503, 504} and attempt < 2:
                     time.sleep(1.5 * (attempt + 1))
                     continue
                 break
@@ -429,7 +409,7 @@ def call_openrouter_with_fallback(api_key, user_content, primary_model=None, fal
 
         if response is None:
             failed_models.append(model)
-            final_error = {"error": f"OpenRouter request failed for model '{model}'.", "details": str(last_error)}
+            final_error = {"error": f"Hugging Face request failed for model '{model}'.", "details": str(last_error)}
             continue
 
         if not response.ok:
@@ -441,12 +421,12 @@ def call_openrouter_with_fallback(api_key, user_content, primary_model=None, fal
 
             failed_models.append(model)
             final_error = {
-                "error": f"OpenRouter request failed with status {status_code}.",
+                "error": f"Hugging Face request failed with status {status_code}.",
                 "details": details,
                 "model": model,
             }
 
-            if status_code in {402, 404, 429, 500, 502, 503, 504}:
+            if status_code in {401, 402, 404, 408, 424, 429, 500, 502, 503, 504}:
                 continue
             break
 
@@ -461,7 +441,7 @@ def call_openrouter_with_fallback(api_key, user_content, primary_model=None, fal
 
         failed_models.append(model)
         final_error = {
-            "error": f"OpenRouter returned no text response for model '{model}'.",
+            "error": f"Hugging Face returned no text response for model '{model}'.",
             "details": body,
         }
 
@@ -484,9 +464,9 @@ def analyze_practice():
     if not files:
         return jsonify({"error": "Upload at least one text file."}), 400
 
-    api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+    api_key = os.getenv("HF_API_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()
     if not api_key:
-        return jsonify({"error": "Missing OPENROUTER_API_KEY in environment."}), 400
+        return jsonify({"error": "Missing HF_API_TOKEN (or HUGGINGFACEHUB_API_TOKEN) in environment."}), 400
 
     max_files = 20
     max_chars_per_file = 12000
@@ -584,7 +564,9 @@ def analyze_practice():
             for item in parsed_files
         ]
     )
-    image_names = ", ".join([item["filename"] for item in image_files]) or "None"
+    if image_files:
+        return jsonify({"error": "Image analysis is currently disabled for Hugging Face backend. Upload text/PDF files only."}), 400
+
     analysis_prompt = f"""
 You are analyzing multiple student practice materials.
 
@@ -605,30 +587,21 @@ Output format:
 
 Use clear headings and keep it concise but specific.
 
-Image files:
-{image_names}
-
 File contents:
 {file_blocks or "None"}
 """.strip()
-
-    user_content = [{"type": "text", "text": analysis_prompt}]
-    for image in image_files:
-        user_content.append({"type": "text", "text": f"Image file: {image['filename']}"})
-        user_content.append({"type": "image_url", "image_url": {"url": image["data_uri"]}})
-
-    has_images = len(image_files) > 0
-    if has_images:
-        image_primary_model = os.getenv("OPENROUTER_IMAGE_MODEL", "google/gemma-3-12b-it:free")
-        image_fallback_models = os.getenv("OPENROUTER_IMAGE_FALLBACK_MODELS", "google/gemma-3-4b-it:free")
-        result = call_openrouter_with_fallback(
-            api_key,
-            user_content,
-            primary_model=image_primary_model,
-            fallback_models_raw=image_fallback_models,
-        )
-    else:
-        result = call_openrouter_with_fallback(api_key, user_content)
+    analysis_model = os.getenv("HF_ANALYSIS_MODEL", "Qwen/Qwen3.5-27B")
+    analysis_fallback = os.getenv(
+        "HF_ANALYSIS_FALLBACK_MODELS",
+        "Qwen/Qwen3.5-35B-A3B,Qwen/Qwen2.5-72B-Instruct",
+    )
+    result = _hf_text(
+        api_key,
+        analysis_prompt,
+        analysis_model,
+        analysis_fallback,
+        system_prompt="You produce precise, structured educational analysis.",
+    )
     if not result["ok"]:
         return jsonify({**result["error"], "models_tried": result["models_tried"], "failed_models": result["failed_models"]}), 502
     text = result["text"]
@@ -651,9 +624,9 @@ def generate_reference_sheet():
         return jsonify({"error": "Analysis text is required."}), 400
     requirements = _normalize_requirements(data.get("requirements") or {})
 
-    generation_mode = os.getenv("REFERENCE_GENERATION_MODE", "openrouter").strip().lower()
-    if generation_mode not in {"openrouter", "local", "auto"}:
-        return jsonify({"error": "REFERENCE_GENERATION_MODE must be one of: openrouter, local, auto"}), 400
+    generation_mode = os.getenv("REFERENCE_GENERATION_MODE", "huggingface").strip().lower()
+    if generation_mode not in {"huggingface", "local", "auto"}:
+        return jsonify({"error": "REFERENCE_GENERATION_MODE must be one of: huggingface, local, auto"}), 400
 
     quality_mode = os.getenv("REFERENCE_QUALITY_MODE", "high").strip().lower()
     if quality_mode not in {"standard", "high"}:
@@ -669,20 +642,20 @@ def generate_reference_sheet():
             if generation_mode == "local":
                 return jsonify({"error": f"Local generation failed: {exc}"}), 500
 
-    api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+    api_key = os.getenv("HF_API_TOKEN", "").strip() or os.getenv("HUGGINGFACEHUB_API_TOKEN", "").strip()
     if not api_key:
-        return jsonify({"error": "Missing OPENROUTER_API_KEY in environment."}), 400
+        return jsonify({"error": "Missing HF_API_TOKEN (or HUGGINGFACEHUB_API_TOKEN) in environment."}), 400
 
     if quality_mode == "high":
-        result = _generate_reference_sheet_openrouter_high_quality(api_key, analysis_text, requirements)
+        result = _generate_reference_sheet_hf_high_quality(api_key, analysis_text, requirements)
     else:
         prompt = build_reference_sheet_prompt(analysis_text, requirements)
-        reference_model = os.getenv("OPENROUTER_REFERENCE_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
+        reference_model = os.getenv("HF_REFERENCE_MODEL", "Qwen/Qwen2.5-72B-Instruct")
         reference_fallback_models = os.getenv(
-            "OPENROUTER_REFERENCE_FALLBACK_MODELS",
-            "mistralai/mistral-small-3.1-24b-instruct:free,google/gemma-3-12b-it:free,google/gemma-3-4b-it:free",
+            "HF_REFERENCE_FALLBACK_MODELS",
+            "Qwen/Qwen3.5-35B-A3B,Qwen/Qwen3.5-27B",
         )
-        result = _openrouter_text(api_key, prompt, reference_model, reference_fallback_models)
+        result = _hf_text(api_key, prompt, reference_model, reference_fallback_models)
     if not result["ok"]:
         return jsonify({**result["error"], "models_tried": result["models_tried"], "failed_models": result["failed_models"]}), 502
 

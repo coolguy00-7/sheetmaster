@@ -1,27 +1,30 @@
 # Training an LLM for Science Olympiad Reference Sheets
 
 This project now supports two generation backends:
-- `openrouter` (existing behavior)
+- `huggingface` (default hosted generation)
 - `local` (your fine-tuned local model + optional LoRA adapter)
 
 Set with `REFERENCE_GENERATION_MODE` in `.env`:
-- `openrouter`
+- `huggingface`
 - `local`
-- `auto` (try local first, then OpenRouter)
+- `auto` (try local first, then Hugging Face)
 
 For highest quality on free models, use:
 
 ```dotenv
-REFERENCE_GENERATION_MODE=openrouter
+REFERENCE_GENERATION_MODE=huggingface
 REFERENCE_QUALITY_MODE=high
-OPENROUTER_REFERENCE_MODEL=meta-llama/llama-3.3-70b-instruct:free
-OPENROUTER_REFERENCE_FALLBACK_MODELS=mistralai/mistral-small-3.1-24b-instruct:free,google/gemma-3-12b-it:free,google/gemma-3-4b-it:free
-OPENROUTER_REFERENCE_CANDIDATE_MODELS=meta-llama/llama-3.3-70b-instruct:free,mistralai/mistral-small-3.1-24b-instruct:free,google/gemma-3-12b-it:free
-OPENROUTER_REFERENCE_MAX_CANDIDATES=3
-OPENROUTER_CRITIQUE_MODEL=google/gemma-3-12b-it:free
-OPENROUTER_CRITIQUE_FALLBACK_MODELS=google/gemma-3-4b-it:free
-OPENROUTER_JUDGE_MODEL=google/gemma-3-12b-it:free
-OPENROUTER_JUDGE_FALLBACK_MODELS=google/gemma-3-4b-it:free
+HF_API_TOKEN=your_hf_token
+HF_ANALYSIS_MODEL=Qwen/Qwen3.5-27B
+HF_ANALYSIS_FALLBACK_MODELS=Qwen/Qwen3.5-35B-A3B,Qwen/Qwen2.5-72B-Instruct
+HF_REFERENCE_MODEL=Qwen/Qwen2.5-72B-Instruct
+HF_REFERENCE_FALLBACK_MODELS=Qwen/Qwen3.5-35B-A3B,Qwen/Qwen3.5-27B
+HF_REFERENCE_CANDIDATE_MODELS=Qwen/Qwen2.5-72B-Instruct,Qwen/Qwen3.5-35B-A3B,Qwen/Qwen3.5-27B
+HF_REFERENCE_MAX_CANDIDATES=3
+HF_CRITIQUE_MODEL=Qwen/Qwen3.5-27B
+HF_CRITIQUE_FALLBACK_MODELS=Qwen/Qwen3.5-35B-A3B
+HF_JUDGE_MODEL=Qwen/Qwen3.5-27B
+HF_JUDGE_FALLBACK_MODELS=Qwen/Qwen3.5-35B-A3B
 ```
 
 ## 1) Build your dataset
